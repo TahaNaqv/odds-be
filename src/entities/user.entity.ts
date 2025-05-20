@@ -5,17 +5,23 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   OneToMany,
+  OneToOne,
 } from 'typeorm';
-import { Raffle } from './raffle.entity';
 import { Ticket } from './ticket.entity';
-import { Referral } from './referral.entity';
+import { ReferralCode } from './referral-code.entity';
 
 @Entity()
 export class User {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @Column({ unique: true })
+  @Column({
+    unique: true,
+    transformer: {
+      to: (value: string) => value?.toLowerCase(),
+      from: (value: string) => value?.toLowerCase(),
+    },
+  })
   walletAddress: string;
 
   @Column({ nullable: true })
@@ -30,17 +36,20 @@ export class User {
   @Column({ default: 0 })
   totalRafflesWon: number;
 
+  @Column({ type: 'decimal', precision: 18, scale: 6, default: 0 })
+  totalPrizeWon: number;
+
+  @Column({ type: 'decimal', precision: 18, scale: 6, default: 0 })
+  totalReferralEarnings: number;
+
   @Column({ default: 0 })
   referralPoints: number;
-
-  @OneToMany(() => Raffle, (raffle) => raffle.creator)
-  createdRaffles: Raffle[];
 
   @OneToMany(() => Ticket, (ticket) => ticket.owner)
   tickets: Ticket[];
 
-  @OneToMany(() => Referral, (referral) => referral.referrer)
-  referrals: Referral[];
+  @OneToOne(() => ReferralCode, (referralCode) => referralCode.owner)
+  referralCode: ReferralCode;
 
   @CreateDateColumn()
   createdAt: Date;

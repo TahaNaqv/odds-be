@@ -4,11 +4,15 @@ import {
   PrimaryGeneratedColumn,
   CreateDateColumn,
   UpdateDateColumn,
-  ManyToOne,
   OneToMany,
 } from 'typeorm';
-import { User } from './user.entity';
 import { Ticket } from './ticket.entity';
+
+export enum RaffleStatus {
+  PENDING = 'PENDING',
+  ACTIVE = 'ACTIVE',
+  COMPLETED = 'COMPLETED',
+}
 
 @Entity()
 export class Raffle {
@@ -21,10 +25,13 @@ export class Raffle {
   @Column('text')
   description: string;
 
+  @Column({ default: 1000 })
+  maxTickets: number;
+
   @Column()
   totalTickets: number;
 
-  @Column()
+  @Column({ type: 'decimal', precision: 18, scale: 6, default: 1 })
   ticketPrice: number;
 
   @Column()
@@ -33,20 +40,33 @@ export class Raffle {
   @Column()
   endDate: Date;
 
-  @Column({ default: false })
-  isActive: boolean;
+  @Column({
+    type: 'enum',
+    enum: RaffleStatus,
+    default: RaffleStatus.PENDING,
+  })
+  status: RaffleStatus;
+
+  @Column({ type: 'decimal', precision: 18, scale: 6, default: 0 })
+  totalPrizeAmount: number;
+
+  @Column({ type: 'decimal', precision: 18, scale: 6, default: 0 })
+  platformFee: number;
+
+  @Column({ type: 'decimal', precision: 18, scale: 6, default: 0 })
+  referralRewards: number;
+
+  @Column({ type: 'decimal', precision: 18, scale: 6, default: 0 })
+  distributedAmount: number;
 
   @Column({ default: false })
-  isCompleted: boolean;
+  isDistributed: boolean;
 
   @Column({ nullable: true })
   winnerId: number;
 
   @Column({ nullable: true })
   winningTicketId: number;
-
-  @ManyToOne(() => User, (user) => user.createdRaffles)
-  creator: User;
 
   @OneToMany(() => Ticket, (ticket) => ticket.raffle)
   tickets: Ticket[];

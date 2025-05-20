@@ -8,6 +8,13 @@ import {
 } from 'typeorm';
 import { User } from './user.entity';
 import { Raffle } from './raffle.entity';
+import { ReferralCode } from './referral-code.entity';
+
+export enum TicketGroup {
+  GROUP_1 = 1, // 2x return
+  GROUP_2 = 2, // 1x return
+  GROUP_3 = 3, // no return
+}
 
 @Entity()
 export class Ticket {
@@ -17,8 +24,18 @@ export class Ticket {
   @Column()
   ticketNumber: number;
 
+  @Column({
+    type: 'enum',
+    enum: TicketGroup,
+    nullable: true,
+  })
+  groupNumber: TicketGroup;
+
+  @Column({ type: 'decimal', precision: 18, scale: 6, default: 0 })
+  prizeAmount: number;
+
   @Column({ default: false })
-  isWinning: boolean;
+  isDistributed: boolean;
 
   @ManyToOne(() => User, (user) => user.tickets)
   owner: User;
@@ -26,11 +43,11 @@ export class Ticket {
   @ManyToOne(() => Raffle, (raffle) => raffle.tickets)
   raffle: Raffle;
 
+  @ManyToOne(() => ReferralCode, { nullable: true })
+  referralCode: ReferralCode;
+
   @Column({ nullable: true })
   purchaseTransactionHash: string;
-
-  @Column({ default: false })
-  isAutoEnrolled: boolean;
 
   @CreateDateColumn()
   createdAt: Date;

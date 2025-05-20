@@ -5,10 +5,12 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { User } from './entities/user.entity';
-import { Referral } from './entities/referral.entity';
 import { Ticket } from './entities/ticket.entity';
 import { Raffle } from './entities/raffle.entity';
+import { Transaction } from './entities/transaction.entity';
 import { AuthModule } from './auth/auth.module';
+import { RaffleModule } from './raffle/raffle.module';
+import { ReferralCode } from './entities/referral-code.entity';
 
 @Module({
   imports: [
@@ -24,13 +26,14 @@ import { AuthModule } from './auth/auth.module';
         username: configService.get('DB_USERNAME'),
         password: configService.get('DB_PASSWORD'),
         database: configService.get('DB_DATABASE'),
-        entities: [Raffle, Ticket, User, Referral],
+        entities: [Raffle, Ticket, User, ReferralCode, Transaction],
         synchronize: configService.get('DB_SYNCHRONIZE'),
       }),
       inject: [ConfigService],
     }),
     ScheduleModule.forRoot(),
     AuthModule,
+    RaffleModule,
   ],
   controllers: [AppController],
   providers: [AppService],
