@@ -88,8 +88,8 @@ export class RaffleSchedulerService {
   private async ensureInactiveRaffles() {
     try {
       const now = new Date();
-      const thirtyDaysFromNow = new Date(now);
-      thirtyDaysFromNow.setDate(thirtyDaysFromNow.getDate() + 30);
+      const tenDaysFromNow = new Date(now);
+      tenDaysFromNow.setDate(tenDaysFromNow.getDate() + 10);
 
       // Set time to start of today (00:00:00)
       const todayStart = new Date(
@@ -107,16 +107,24 @@ export class RaffleSchedulerService {
         59,
       );
 
-      // Check if we have a raffle for today
-      const todayRaffle = await this.raffleRepository.findOne({
+      // Get all raffles within next 10 days
+      const existingRaffles = await this.raffleRepository.find({
         where: {
-          status: RaffleStatus.PENDING,
-          startDate: LessThan(todayEnd),
-          endDate: MoreThan(todayStart),
+          startDate: LessThan(tenDaysFromNow),
         },
+        order: { startDate: 'ASC' },
       });
 
-      if (!todayRaffle) {
+      // Create a map of existing raffle dates
+      const existingDates = new Map<string, Raffle>();
+      existingRaffles.forEach((raffle) => {
+        const dateString = new Date(raffle.startDate).toDateString();
+        existingDates.set(dateString, raffle);
+      });
+
+      // Check and create raffle for today
+      const todayDateString = todayStart.toDateString();
+      if (!existingDates.has(todayDateString)) {
         this.logger.log('No raffle found for today, creating one');
         const newRaffle = this.raffleRepository.create({
           title: `Daily Raffle ${todayStart.toLocaleDateString()}`,
@@ -135,32 +143,16 @@ export class RaffleSchedulerService {
         });
 
         await this.raffleRepository.save(newRaffle);
+        existingDates.set(todayDateString, newRaffle);
         this.logger.log('Created raffle for today');
       }
-
-      // Get all pending raffles within next 30 days
-      const pendingRaffles = await this.raffleRepository.find({
-        where: {
-          status: RaffleStatus.PENDING,
-          startDate: LessThan(thirtyDaysFromNow),
-        },
-        order: { startDate: 'ASC' },
-      });
-
-      // Create a map of existing raffle dates
-      const existingDates = new Set(
-        pendingRaffles.map((raffle) =>
-          new Date(raffle.startDate).toDateString(),
-        ),
-      );
 
       // Create new raffles for missing dates
       let currentDate = new Date(todayStart);
       currentDate.setDate(currentDate.getDate() + 1); // Start from tomorrow
-
       const newRaffles: Raffle[] = [];
 
-      while (currentDate <= thirtyDaysFromNow) {
+      while (currentDate <= tenDaysFromNow) {
         const dateString = currentDate.toDateString();
 
         if (!existingDates.has(dateString)) {
@@ -195,7 +187,7 @@ export class RaffleSchedulerService {
           });
 
           newRaffles.push(raffle);
-          existingDates.add(dateString);
+          existingDates.set(dateString, raffle);
         }
 
         currentDate.setDate(currentDate.getDate() + 1);
@@ -204,12 +196,25 @@ export class RaffleSchedulerService {
       if (newRaffles.length > 0) {
         await this.raffleRepository.save(newRaffles);
         this.logger.log(
-          `Successfully created ${newRaffles.length} new pending raffles`,
+          `Successfully created ${newRaffles.length} new pending raffles for next 10 days`,
         );
+      } else {
+        this.logger.log('All raffles for next 10 days are already created');
       }
+
+      // Verify we have exactly one raffle per day
+      const allDates = new Set<string>();
+      existingRaffles.forEach((raffle) => {
+        const dateString = new Date(raffle.startDate).toDateString();
+        if (allDates.has(dateString)) {
+          this.logger.warn(`Multiple raffles found for date: ${dateString}`);
+        }
+        allDates.add(dateString);
+      });
     } catch (error) {
       this.logger.error('Error ensuring inactive raffles:', error);
       throw error;
     }
   }
 }
+ 
