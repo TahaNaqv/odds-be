@@ -37,6 +37,9 @@ export class Ticket {
   @Column({ default: false })
   isDistributed: boolean;
 
+  @Column({ nullable: true })
+  transactionHash: string;
+
   @ManyToOne(() => User, (user) => user.tickets)
   owner: User;
 
@@ -45,9 +48,6 @@ export class Ticket {
 
   @ManyToOne(() => ReferralCode, { nullable: true })
   referralCode: ReferralCode;
-
-  @Column({ nullable: true })
-  purchaseTransactionHash: string;
 
   @CreateDateColumn()
   createdAt: Date;

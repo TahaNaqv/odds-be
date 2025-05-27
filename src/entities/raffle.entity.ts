@@ -68,6 +68,12 @@ export class Raffle {
   @Column({ nullable: true })
   winningTicketId: number;
 
+  @Column({ nullable: true })
+  transactionHash: string;
+
+  @Column({ default: false })
+  isCreated: boolean;
+
   @OneToMany(() => Ticket, (ticket) => ticket.raffle)
   tickets: Ticket[];
 

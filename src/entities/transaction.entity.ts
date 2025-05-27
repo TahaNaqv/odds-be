@@ -48,6 +48,9 @@ export class Transaction {
   transactionHash: string;
 
   @Column({ nullable: true })
+  nonce: number;
+
+  @Column({ nullable: true })
   description: string;
 
   @Column({
