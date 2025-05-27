@@ -23,6 +23,11 @@ export class ContractService {
     '0x646cf558': 'LotteryIdExists',
     '0x5cd83192': 'InsufficientBalance',
     '0x13be252b': 'InsufficientAllowance',
+    '0x66f3ef9b': 'LotteryNotActive',
+    '0x8c2a993e': 'LotteryAlreadyDrawn',
+    '0x9c2a993e': 'NoTickets',
+    '0x7c2a993e': 'InsufficientContractBalance',
+    '0x6c2a993e': 'LotteryDoesNotExist'
   };
 
   constructor(

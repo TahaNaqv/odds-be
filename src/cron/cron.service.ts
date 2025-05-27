@@ -53,6 +53,24 @@ export class CronService {
 
     for (const raffle of expiredRaffles) {
       try {
+        // Check lottery state in contract first
+        const lottery = await this.contractService.getLottery(raffle.id);
+
+        if (!lottery) {
+          this.logger.warn(`Lottery ${raffle.id} does not exist in contract`);
+          continue;
+        }
+
+        if (!lottery.isActive) {
+          this.logger.warn(`Lottery ${raffle.id} is not active in contract`);
+          // Update raffle status in database to match contract state
+          await this.raffleRepository.update(raffle.id, {
+            status: RaffleStatus.COMPLETED,
+            isDistributed: lottery.isDrawn,
+          });
+          continue;
+        }
+
         // Update raffle status in database
         raffle.status = RaffleStatus.COMPLETED;
         await this.raffleRepository.save(raffle);
