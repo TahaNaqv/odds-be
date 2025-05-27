@@ -11,6 +11,11 @@ import { Transaction } from './entities/transaction.entity';
 import { AuthModule } from './auth/auth.module';
 import { RaffleModule } from './raffle/raffle.module';
 import { ReferralCode } from './entities/referral-code.entity';
+import { ContractModule } from './contract/contract.module';
+import { WebhookModule } from './webhook/webhook.module';
+import { CronModule } from './cron/cron.module';
+import { TicketModule } from './ticket/ticket.module';
+import { ReferralModule } from './referral/referral.module';
 
 @Module({
   imports: [
@@ -34,6 +39,11 @@ import { ReferralCode } from './entities/referral-code.entity';
     ScheduleModule.forRoot(),
     AuthModule,
     RaffleModule,
+    ContractModule,
+    WebhookModule,
+    CronModule,
+    TicketModule,
+    ReferralModule,
   ],
   controllers: [AppController],
   providers: [AppService],
