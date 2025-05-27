@@ -51,6 +51,7 @@ export class RaffleController {
       purchaseTicketDto.ticketCount,
       purchaseTicketDto.autoEntry,
       purchaseTicketDto.referralCode,
+      purchaseTicketDto.walletAddress,
     );
   }
 
@@ -79,4 +80,3 @@ export class RaffleController {
     return this.raffleService.getRaffleWinner(id);
   }
 }
- 

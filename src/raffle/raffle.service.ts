@@ -17,9 +17,15 @@ import { PurchaseTicketDto } from './dto/purchase-ticket.dto';
 import { AutoEnrollDto } from './dto/auto-enroll.dto';
 import { ReferralService } from '../referral/referral.service';
 import { ReferralCode } from '../entities/referral-code.entity';
+import { ContractService } from '../contract/contract.service';
+import { ContractTransactionDto } from './dto/contract-transaction.dto';
+import { ConfigService } from '@nestjs/config';
+import { Logger } from '@nestjs/common';
 
 @Injectable()
 export class RaffleService {
+  private readonly logger = new Logger(RaffleService.name);
+
   constructor(
     @InjectRepository(Raffle)
     private raffleRepository: Repository<Raffle>,
@@ -29,9 +35,11 @@ export class RaffleService {
     private userRepository: Repository<User>,
     @InjectRepository(Transaction)
     private transactionRepository: Repository<Transaction>,
-    private referralService: ReferralService,
     @InjectRepository(ReferralCode)
     private referralCodeRepository: Repository<ReferralCode>,
+    private referralService: ReferralService,
+    private contractService: ContractService,
+    private configService: ConfigService,
   ) {}
 
   async getCurrentRaffle() {
@@ -83,7 +91,17 @@ export class RaffleService {
     ticketCount: number,
     autoEntry: number,
     referralCode: string,
-  ): Promise<{ tickets: Ticket[]; userReferralCode?: string }> {
+    walletAddress: string,
+  ): Promise<{
+    tickets: Ticket[];
+    userReferralCode?: string;
+    contractTx: {
+      approveTx: ContractTransactionDto;
+      buyTx: ContractTransactionDto;
+    };
+    raffleIds: number[];
+    ticketCount: number;
+  }> {
     // Validate referral code
     const referralCodeEntity = await this.referralCodeRepository.findOne({
       where: { code: referralCode.toLowerCase() },
@@ -108,14 +126,15 @@ export class RaffleService {
     }
 
     // Get future raffles for auto-entry
-    const futureRaffles = await this.raffleRepository.find({
-      where: {
-        status: RaffleStatus.PENDING,
-        startDate: MoreThan(currentRaffle.endDate),
-      },
-      order: { startDate: 'ASC' },
-      take: autoEntry - 1, // -1 because we already have current raffle
-    });
+    const futureRaffles = (
+      await this.raffleRepository.find({
+        where: {
+          status: RaffleStatus.PENDING,
+          startDate: MoreThan(currentRaffle.endDate),
+        },
+        order: { startDate: 'ASC' },
+      })
+    ).slice(0, Math.max(0, autoEntry - 1)); // Limit the results after fetching
 
     // Combine current and future raffles
     const allRaffles = [currentRaffle, ...futureRaffles];
@@ -130,6 +149,7 @@ export class RaffleService {
     // Create tickets for each raffle
     const createdTickets: Ticket[] = [];
 
+    const raffleIds: number[] = [];
     for (const raffle of allRaffles) {
       // Check if enough tickets are available
       const remainingTickets = raffle.maxTickets - raffle.totalTickets;
@@ -157,6 +177,8 @@ export class RaffleService {
         totalTickets: raffle.totalTickets + ticketCount,
       });
 
+      raffleIds.push(raffle.id);
+
       // Update referral code usage
       await this.referralCodeRepository.update(referralCodeEntity.id, {
         totalUses: referralCodeEntity.totalUses + ticketCount,
@@ -167,6 +189,13 @@ export class RaffleService {
         totalTicketsPurchased: () => `totalTicketsPurchased + ${ticketCount}`,
       });
     }
+
+    // Create unsigned transactions for contract
+    const contractTx = await this.contractService.createUnsignedBuyTicketsTx(
+      walletAddress,
+      raffleIds,
+      ticketCount,
+    );
 
     // Check if this is the user's first purchase and generate referral code if needed
     const user = await this.userRepository.findOne({
@@ -184,6 +213,9 @@ export class RaffleService {
     return {
       tickets: createdTickets,
       userReferralCode,
+      contractTx,
+      raffleIds,
+      ticketCount,
     };
   }
 
@@ -290,6 +322,71 @@ export class RaffleService {
       winnerAddress: winningTicket.owner.walletAddress,
       prizeAmount: winningTicket.prizeAmount,
     };
+  }
+
+  async handleTicketPurchase(
+    lotteryId: number,
+    buyerAddress: string,
+    ticketId: number,
+    count: number,
+    transactionHash: string,
+  ) {
+    try {
+      // Get or create user
+      let user = await this.userRepository.findOne({
+        where: { walletAddress: buyerAddress.toLowerCase() },
+      });
+      if (!user) {
+        user = this.userRepository.create({
+          walletAddress: buyerAddress.toLowerCase(),
+        });
+        await this.userRepository.save(user);
+      }
+
+      // Get the raffle
+      const raffle = await this.raffleRepository.findOne({
+        where: { id: lotteryId },
+      });
+
+      if (!raffle) {
+        throw new Error(`Raffle ${lotteryId} not found`);
+      }
+
+      // Create transaction record
+      const transaction = this.transactionRepository.create({
+        type: TransactionType.TICKET_PURCHASE,
+        amount: count * raffle.ticketPrice,
+        fromAddress: buyerAddress.toLowerCase(),
+        transactionHash,
+        raffle,
+        status: TransactionStatus.COMPLETED,
+      });
+
+      await this.transactionRepository.save(transaction);
+
+      // Update user's total tickets purchased
+      await this.userRepository.update(user.id, {
+        totalTicketsPurchased: () => `totalTicketsPurchased + ${count}`,
+      });
+
+      this.logger.log(
+        `Successfully processed ticket purchase for raffle ${lotteryId}`,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Error handling ticket purchase for raffle ${lotteryId}:`,
+        error,
+      );
+      throw error;
+    }
+  }
+
+  async updateRaffle(id: number, updateData: Partial<Raffle>) {
+    return this.raffleRepository.update(id, updateData);
+  }
+
+  async updateTicket(id: number, updateData: Partial<Ticket>) {
+    return this.ticketRepository.update(id, updateData);
   }
 
   private formatRaffleResponse(raffle: Raffle) {
