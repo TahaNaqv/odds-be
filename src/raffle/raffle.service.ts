@@ -59,7 +59,7 @@ export class RaffleService {
     const [raffles, total] = await this.raffleRepository.findAndCount({
       where: { status: RaffleStatus.COMPLETED },
       relations: ['tickets'],
-      order: { endDate: 'DESC' },
+      order: { id: 'DESC' },
       skip: (page - 1) * limit,
       take: limit,
     });
@@ -130,9 +130,9 @@ export class RaffleService {
       await this.raffleRepository.find({
         where: {
           status: RaffleStatus.PENDING,
-          startDate: MoreThan(currentRaffle.endDate),
+          id: MoreThan(currentRaffle.id),
         },
-        order: { startDate: 'ASC' },
+        order: { id: 'ASC' },
       })
     ).slice(0, Math.max(0, autoEntry - 1)); // Limit the results after fetching
 
@@ -396,8 +396,6 @@ export class RaffleService {
 
     return {
       id: raffle.id,
-      startTime: raffle.startDate,
-      endTime: raffle.endDate,
       ticketsSold: raffle.totalTickets,
       maxTickets: raffle.maxTickets,
       targetAmount: raffle.totalPrizeAmount,

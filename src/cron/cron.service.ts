@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, LessThan } from 'typeorm';
+import { Repository } from 'typeorm';
 import { Raffle, RaffleStatus } from '../entities/raffle.entity';
 import { ContractService } from '../contract/contract.service';
 
@@ -13,7 +13,7 @@ export class CronService {
     @InjectRepository(Raffle)
     private raffleRepository: Repository<Raffle>,
     private contractService: ContractService,
-  ) {}
+  ) { }
 
   // Run every minute to manage raffle states
   @Cron(CronExpression.EVERY_MINUTE, {
@@ -27,198 +27,77 @@ export class CronService {
         `Running raffle state management at ${now.toISOString()}`,
       );
 
-      // First ensure we have enough pending raffles
-      await this.ensureInactiveRaffles();
+      // Ensure we have exactly 10 active raffles
+      await this.ensureRaffles();
 
-      // Then complete any expired raffles
-      await this.completeExpiredRaffles();
-
-      // Finally activate the next raffle
-      await this.activateNextRaffle();
+      // Complete raffles that have sold all tickets
+      await this.completeRaffle();
     } catch (error) {
       this.logger.error('Error managing raffle states:', error);
     }
   }
 
-  private async completeExpiredRaffles() {
-    const now = new Date();
-
-    // Find active raffles that have expired
-    const expiredRaffles = await this.raffleRepository.find({
-      where: {
-        status: RaffleStatus.ACTIVE,
-        endDate: LessThan(now),
-      },
-    });
-
-    for (const raffle of expiredRaffles) {
-      try {
-        // Check lottery state in contract first
-        const lottery = await this.contractService.getLottery(raffle.id);
-
-        if (!lottery) {
-          this.logger.warn(`Lottery ${raffle.id} does not exist in contract`);
-          continue;
-        }
-
-        if (!lottery.isActive) {
-          this.logger.warn(`Lottery ${raffle.id} is not active in contract`);
-          // Update raffle status in database to match contract state
-          await this.raffleRepository.update(raffle.id, {
-            status: RaffleStatus.COMPLETED,
-            isDistributed: lottery.isDrawn,
-          });
-          continue;
-        }
-
-        // Update raffle status in database
-        raffle.status = RaffleStatus.COMPLETED;
-        await this.raffleRepository.save(raffle);
-        this.logger.log(`Completed expired raffle ${raffle.id} in database`);
-
-        // End lottery in smart contract
-        const txHash = await this.contractService.endLottery(raffle.id);
-        this.logger.log(
-          `Ended lottery for raffle ${raffle.id} in contract. Transaction: ${txHash}`,
-        );
-      } catch (error) {
-        this.logger.error(`Error completing raffle ${raffle.id}:`, error);
-        // Continue with other raffles even if one fails
-      }
-    }
-  }
-
-  private async activateNextRaffle() {
-    const now = new Date();
-
-    // Check if we have any active raffles
-    const activeRaffle = await this.raffleRepository.findOne({
-      where: { status: RaffleStatus.ACTIVE },
-    });
-
-    // If no active raffle exists, find and activate the next one
-    if (!activeRaffle) {
-      const nextRaffle = await this.raffleRepository.findOne({
-        where: {
-          status: RaffleStatus.PENDING,
-          startDate: LessThan(now),
-        },
-        order: { startDate: 'ASC' },
-      });
-
-      if (nextRaffle) {
-        nextRaffle.status = RaffleStatus.ACTIVE;
-        await this.raffleRepository.save(nextRaffle);
-        this.logger.log(
-          `Activated raffle ${nextRaffle.id} for ${nextRaffle.startDate}`,
-        );
-      } else {
-        this.logger.warn('No pending raffles found to activate');
-      }
-    } else {
-      this.logger.log('Active raffle already exists');
-    }
-  }
-
-  private async ensureInactiveRaffles() {
+  /**
+   * Ensures there are exactly 10 active raffles in the database and smart contract.
+   * If there are fewer than 10 active raffles, it creates new ones.
+   */
+  private async ensureRaffles() {
     try {
-      const now = new Date();
-      const tenDaysFromNow = new Date(now);
-      tenDaysFromNow.setDate(tenDaysFromNow.getDate() + 10);
-
-      // Set time to start of today (00:00:00)
-      const todayStart = new Date(
-        now.getFullYear(),
-        now.getMonth(),
-        now.getDate(),
-      );
-      // Set time to end of today (23:59:59)
-      const todayEnd = new Date(
-        now.getFullYear(),
-        now.getMonth(),
-        now.getDate(),
-        23,
-        59,
-        59,
-      );
-
-      // Get all raffles within next 10 days
-      const existingRaffles = await this.raffleRepository.find({
-        where: {
-          startDate: LessThan(tenDaysFromNow),
-        },
-        order: { startDate: 'ASC' },
+      // Get all active raffles
+      const activeRaffles = await this.raffleRepository.find({
+        where: { status: RaffleStatus.ACTIVE },
       });
 
-      // Create a map of existing raffle dates
-      const existingDates = new Map<string, Raffle>();
-      existingRaffles.forEach((raffle) => {
-        const dateString = new Date(raffle.startDate).toDateString();
-        existingDates.set(dateString, raffle);
-      });
+      this.logger.debug(`Found ${activeRaffles.length} active raffles`);
 
-      // Check and create raffle for today
-      const todayDateString = todayStart.toDateString();
-      if (!existingDates.has(todayDateString)) {
-        this.logger.log('No raffle found for today, creating one');
-        const newRaffle = this.raffleRepository.create({
-          title: `Daily Raffle ${todayStart.toLocaleDateString()}`,
-          description: `Daily raffle for ${todayStart.toLocaleDateString()}`,
-          maxTickets: 1000,
-          totalTickets: 0,
-          ticketPrice: 1,
-          startDate: todayStart,
-          endDate: todayEnd,
-          status: RaffleStatus.PENDING,
-          totalPrizeAmount: 1000,
-          platformFee: 50,
-          referralRewards: 50,
-          distributedAmount: 0,
-          isDistributed: false,
-        });
-
-        const savedRaffle = await this.raffleRepository.save(newRaffle);
-        // Create lottery in smart contract
-        await this.contractService.createLottery(
-          savedRaffle.id,
-          savedRaffle.maxTickets,
-        );
-        existingDates.set(todayDateString, savedRaffle);
-        this.logger.log('Created raffle for today');
+      // If we have exactly 10 active raffles, no action needed
+      if (activeRaffles.length === 10) {
+        this.logger.debug('Already have 10 active raffles, no action needed');
+        return;
       }
 
-      // Create new raffles for missing dates
-      let currentDate = new Date(todayStart);
-      currentDate.setDate(currentDate.getDate() + 1); // Start from tomorrow
-      const newRaffles: Raffle[] = [];
+      // If we have more than 10 active raffles (shouldn't happen, but just in case)
+      if (activeRaffles.length > 10) {
+        this.logger.warn(`Found ${activeRaffles.length} active raffles, which is more than the required 10`);
+        return;
+      }
 
-      while (currentDate <= tenDaysFromNow) {
-        const dateString = currentDate.toDateString();
+      // Calculate how many new raffles we need to create
+      const neededRaffles = 10 - activeRaffles.length;
+      this.logger.debug(`Need to create ${neededRaffles} new raffles`);
 
-        if (!existingDates.has(dateString)) {
-          const startDate = new Date(
-            currentDate.getFullYear(),
-            currentDate.getMonth(),
-            currentDate.getDate(),
-          );
-          const endDate = new Date(
-            currentDate.getFullYear(),
-            currentDate.getMonth(),
-            currentDate.getDate(),
-            23,
-            59,
-            59,
-          );
+      // Check if we have enough pending raffles to activate
+      const pendingRaffles = await this.raffleRepository.find({
+        where: { status: RaffleStatus.PENDING },
+        order: { id: 'ASC' },
+        take: neededRaffles,
+      });
 
+      this.logger.debug(`Found ${pendingRaffles.length} pending raffles`);
+
+      // Activate pending raffles
+      for (const raffle of pendingRaffles) {
+        raffle.status = RaffleStatus.ACTIVE;
+        await this.raffleRepository.save(raffle);
+        this.logger.log(`Activated raffle ${raffle.id}`);
+      }
+
+      // If we still need more raffles after activating all pending ones
+      const remainingNeeded = neededRaffles - pendingRaffles.length;
+      if (remainingNeeded > 0) {
+        this.logger.debug(`Need to create ${remainingNeeded} new raffles`);
+        const newRaffles: Raffle[] = [];
+
+        // Create new raffles
+        for (let i = 0; i < remainingNeeded; i++) {
+          const now = new Date();
           const raffle = this.raffleRepository.create({
-            title: `Daily Raffle ${startDate.toLocaleDateString()}`,
-            description: `Daily raffle for ${startDate.toLocaleDateString()}`,
+            title: `Raffle ${now.toISOString()}`,
+            description: `Raffle created at ${now.toISOString()}`,
             maxTickets: 1000,
             totalTickets: 0,
             ticketPrice: 1,
-            startDate,
-            endDate,
-            status: RaffleStatus.PENDING,
+            status: RaffleStatus.ACTIVE,
             totalPrizeAmount: 1000,
             platformFee: 50,
             referralRewards: 50,
@@ -227,39 +106,92 @@ export class CronService {
           });
 
           newRaffles.push(raffle);
-          existingDates.set(dateString, raffle);
         }
 
-        currentDate.setDate(currentDate.getDate() + 1);
-      }
-
-      if (newRaffles.length > 0) {
+        // Save new raffles to database
         const savedRaffles = await this.raffleRepository.save(newRaffles);
+
         // Create lotteries in smart contract for each new raffle
         for (const raffle of savedRaffles) {
           await this.contractService.createLottery(
             raffle.id,
             raffle.maxTickets,
           );
+          this.logger.log(`Created new active raffle ${raffle.id} with lottery in smart contract`);
         }
-        this.logger.log(
-          `Successfully created ${newRaffles.length} new pending raffles for next 10 days`,
-        );
-      } else {
-        this.logger.log('All raffles for next 10 days are already created');
       }
 
-      // Verify we have exactly one raffle per day
-      const allDates = new Set<string>();
-      existingRaffles.forEach((raffle) => {
-        const dateString = new Date(raffle.startDate).toDateString();
-        if (allDates.has(dateString)) {
-          this.logger.warn(`Multiple raffles found for date: ${dateString}`);
-        }
-        allDates.add(dateString);
+      // Verify we now have exactly 10 active raffles
+      const finalActiveRaffles = await this.raffleRepository.find({
+        where: { status: RaffleStatus.ACTIVE },
       });
+
+      this.logger.log(`Now have ${finalActiveRaffles.length} active raffles`);
     } catch (error) {
-      this.logger.error('Error ensuring inactive raffles:', error);
+      this.logger.error('Error ensuring active raffles:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Completes raffles that have sold all tickets.
+   * Updates the raffle status in the database and ends the lottery in the smart contract.
+   */
+  private async completeRaffle() {
+    try {
+      // Find active raffles
+      const activeRaffles = await this.raffleRepository.find({
+        where: {
+          status: RaffleStatus.ACTIVE,
+        },
+      });
+
+      this.logger.debug(`Checking ${activeRaffles.length} active raffles for completion`);
+
+      for (const raffle of activeRaffles) {
+        try {
+          // Check if all tickets are sold
+          if (raffle.totalTickets >= raffle.maxTickets) {
+            this.logger.log(`Raffle ${raffle.id} has sold all tickets (${raffle.totalTickets}/${raffle.maxTickets}), completing it`);
+
+            // Check lottery state in contract first
+            const lottery = await this.contractService.getLottery(raffle.id);
+
+            if (!lottery) {
+              this.logger.warn(`Lottery ${raffle.id} does not exist in contract`);
+              continue;
+            }
+
+            if (!lottery.isActive) {
+              this.logger.warn(`Lottery ${raffle.id} is not active in contract`);
+              // Update raffle status in database to match contract state
+              await this.raffleRepository.update(raffle.id, {
+                status: RaffleStatus.COMPLETED,
+                isDistributed: lottery.isDrawn,
+              });
+              continue;
+            }
+
+            // Update raffle status in database
+            raffle.status = RaffleStatus.COMPLETED;
+            await this.raffleRepository.save(raffle);
+            this.logger.log(`Completed raffle ${raffle.id} in database`);
+
+            // End lottery in smart contract
+            const txHash = await this.contractService.endLottery(raffle.id);
+            this.logger.log(
+              `Ended lottery for raffle ${raffle.id} in contract. Transaction: ${txHash}`,
+            );
+          } else {
+            this.logger.debug(`Raffle ${raffle.id} has not sold all tickets yet (${raffle.totalTickets}/${raffle.maxTickets})`);
+          }
+        } catch (error) {
+          this.logger.error(`Error processing raffle ${raffle.id}:`, error);
+          // Continue with other raffles even if one fails
+        }
+      }
+    } catch (error) {
+      this.logger.error('Error completing raffles:', error);
       throw error;
     }
   }

@@ -34,11 +34,11 @@ export class Raffle {
   @Column({ type: 'decimal', precision: 18, scale: 6, default: 1 })
   ticketPrice: number;
 
-  @Column()
-  startDate: Date;
+  // @Column()
+  // startDate: Date;
 
-  @Column()
-  endDate: Date;
+  // @Column()
+  // endDate: Date;
 
   @Column({
     type: 'enum',
