@@ -33,6 +33,9 @@ import { ReferralModule } from './referral/referral.module';
         database: configService.get('DB_DATABASE'),
         entities: [Raffle, Ticket, User, ReferralCode, Transaction],
         synchronize: configService.get('DB_SYNCHRONIZE'),
+        ssl: {
+          rejectUnauthorized: false, // Use this for development only
+        },
       }),
       inject: [ConfigService],
     }),
