@@ -12,7 +12,7 @@ async function bootstrap() {
 
   // Enable CORS
   app.enableCors({
-    origin: ['http://localhost:8080', 'http://127.0.0.1:8080'], // Add your frontend URLs
+    origin: ['http://localhost:8080', 'http://127.0.0.1:8080', 'https://odds-fe.netlify.app'], // Add your frontend URLs
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
     credentials: true,
     allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
