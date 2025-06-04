@@ -40,12 +40,13 @@ export class RaffleService {
     private referralService: ReferralService,
     private contractService: ContractService,
     private configService: ConfigService,
-  ) {}
+  ) { }
 
   async getCurrentRaffle() {
     const currentRaffle = await this.raffleRepository.findOne({
       where: { status: RaffleStatus.ACTIVE },
       relations: ['tickets'],
+      order: { id: 'ASC' }, // Order by ID ascending to get the minimum ID
     });
 
     if (!currentRaffle) {
@@ -129,7 +130,7 @@ export class RaffleService {
     const futureRaffles = (
       await this.raffleRepository.find({
         where: {
-          status: RaffleStatus.PENDING,
+          status: RaffleStatus.ACTIVE,
           id: MoreThan(currentRaffle.id),
         },
         order: { id: 'ASC' },
