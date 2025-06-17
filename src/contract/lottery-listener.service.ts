@@ -147,8 +147,6 @@ export class LotteryListenerService implements OnModuleInit {
             distributedAmount: Number(ethers.formatUnits(distributedPool, 6)),
             platformFee: Number(ethers.formatUnits(platformCut, 6)),
             totalPrizeAmount: Number(ethers.formatUnits(prizePool, 6)),
-            winnerId: Number(winningTicketIds[0]), // First winning ticket
-            winningTicketId: Number(winningTicketIds[0]),
             transactionHash: event.log.transactionHash,
           });
 

@@ -63,12 +63,6 @@ export class Raffle {
   isDistributed: boolean;
 
   @Column({ nullable: true })
-  winnerId: number;
-
-  @Column({ nullable: true })
-  winningTicketId: number;
-
-  @Column({ nullable: true })
   transactionHash: string;
 
   @Column({ default: false })

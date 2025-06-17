@@ -402,8 +402,6 @@ export class RaffleService {
       targetAmount: raffle.totalPrizeAmount,
       prizePool: raffle.distributedAmount,
       progress: (raffle.totalTickets / raffle.maxTickets) * 100,
-      winner: raffle.winnerId ? raffle.winnerId : undefined,
-      winningTicket: raffle.winningTicketId,
       ticketPrice: raffle.ticketPrice,
       status: raffle.status,
     };
