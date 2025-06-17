@@ -96,4 +96,40 @@ export class ReferralService {
       where: { isPlatformCode: true },
     });
   }
+
+  async getLeaderboard(sortBy: 'referees' | 'earnings', order: 'asc' | 'desc') {
+    const referralCodes = await this.referralCodeRepository.find({
+      where: { isPlatformCode: false },
+      relations: ['owner'],
+      order: {
+        [sortBy === 'referees' ? 'totalUses' : 'totalRewards']: order,
+      },
+      take: 10,
+    });
+
+    return referralCodes.map((code) => ({
+      wallet: code.owner.walletAddress,
+      referees: code.totalUses,
+      earnings: Number(code.totalRewards),
+      referralCode: code.code,
+    }));
+  }
+
+  async getUserReferralStats(wallet: string) {
+    const user = await this.userRepository.findOne({
+      where: { walletAddress: wallet },
+      relations: ['referralCode'],
+    });
+
+    if (!user || !user.referralCode) {
+      return null;
+    }
+
+    return {
+      wallet: user.walletAddress,
+      referees: user.referralCode.totalUses,
+      earnings: Number(user.referralCode.totalRewards),
+      referralCode: user.referralCode.code,
+    };
+  }
 }
