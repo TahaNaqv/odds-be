@@ -40,7 +40,7 @@ export class RaffleService {
     private referralService: ReferralService,
     private contractService: ContractService,
     private configService: ConfigService,
-  ) { }
+  ) {}
 
   async getCurrentRaffle() {
     const currentRaffle = await this.raffleRepository.findOne({
@@ -53,7 +53,7 @@ export class RaffleService {
       throw new NotFoundException('No active raffle found');
     }
 
-    return this.formatRaffleResponse(currentRaffle);
+    return currentRaffle;
   }
 
   async getPastRaffles(page: number = 1, limit: number = 10) {
