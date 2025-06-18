@@ -55,15 +55,16 @@ export class RaffleController {
     );
   }
 
-  @UseGuards(JwtAuthGuard)
-  @Post('auto-enroll')
-  async setAutoEnroll(@Body() autoEnrollDto: AutoEnrollDto) {
-    return this.raffleService.setAutoEnroll(autoEnrollDto);
+  @Get('user/:walletAddress/activity')
+  async getUserActivity(
+    @Param('walletAddress') walletAddress: string,
+  ): Promise<any[]> {
+    return this.raffleService.getUserActivity(walletAddress);
   }
 
-  @Get('user/:walletAddress/activity')
-  async getUserActivity(@Param('walletAddress') walletAddress: string) {
-    return this.raffleService.getUserActivity(walletAddress);
+  @Get('user/:walletAddress/activity/stats')
+  async getUserActivityStats(@Param('walletAddress') walletAddress: string) {
+    return this.raffleService.getUserActivityStats(walletAddress);
   }
 
   @Get(':id/tickets')

@@ -7,12 +7,10 @@ import { AppService } from './app.service';
 import { User } from './entities/user.entity';
 import { Ticket } from './entities/ticket.entity';
 import { Raffle } from './entities/raffle.entity';
-import { Transaction } from './entities/transaction.entity';
 import { AuthModule } from './auth/auth.module';
 import { RaffleModule } from './raffle/raffle.module';
 import { ReferralCode } from './entities/referral-code.entity';
 import { ContractModule } from './contract/contract.module';
-import { WebhookModule } from './webhook/webhook.module';
 import { CronModule } from './cron/cron.module';
 import { TicketModule } from './ticket/ticket.module';
 import { ReferralModule } from './referral/referral.module';
@@ -31,7 +29,7 @@ import { ReferralModule } from './referral/referral.module';
         username: configService.get('DB_USERNAME'),
         password: configService.get('DB_PASSWORD'),
         database: configService.get('DB_DATABASE'),
-        entities: [Raffle, Ticket, User, ReferralCode, Transaction],
+        entities: [Raffle, Ticket, User, ReferralCode],
         synchronize: configService.get('DB_SYNCHRONIZE'),
         ssl: {
           rejectUnauthorized: false, // Use this for development only
@@ -43,7 +41,6 @@ import { ReferralModule } from './referral/referral.module';
     AuthModule,
     RaffleModule,
     ContractModule,
-    WebhookModule,
     CronModule,
     TicketModule,
     ReferralModule,

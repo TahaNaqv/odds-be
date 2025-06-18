@@ -8,11 +8,6 @@ import { Repository, MoreThan } from 'typeorm';
 import { Raffle, RaffleStatus } from '../entities/raffle.entity';
 import { Ticket } from '../entities/ticket.entity';
 import { User } from '../entities/user.entity';
-import {
-  Transaction,
-  TransactionType,
-  TransactionStatus,
-} from '../entities/transaction.entity';
 import { PurchaseTicketDto } from './dto/purchase-ticket.dto';
 import { AutoEnrollDto } from './dto/auto-enroll.dto';
 import { ReferralService } from '../referral/referral.service';
@@ -21,6 +16,24 @@ import { ContractService } from '../contract/contract.service';
 import { ContractTransactionDto } from './dto/contract-transaction.dto';
 import { ConfigService } from '@nestjs/config';
 import { Logger } from '@nestjs/common';
+
+// Define the UserActivity interface to match frontend expectations
+interface UserActivity {
+  id: string;
+  type: 'purchase' | 'win';
+  raffleId: string;
+  timestamp: string;
+  ticketCount?: number;
+  totalSpent?: number;
+  token?: 'USDC' | 'USDT' | 'mUSDC';
+  prize?: number;
+  winningTicket?: number;
+  ticketIds?: number[];
+  referralCode?: string;
+  isAutoEnrolled?: boolean;
+  autoEnrollId?: string;
+  status?: 'PENDING' | 'COMPLETED' | 'FAILED';
+}
 
 @Injectable()
 export class RaffleService {
@@ -33,8 +46,6 @@ export class RaffleService {
     private ticketRepository: Repository<Ticket>,
     @InjectRepository(User)
     private userRepository: Repository<User>,
-    @InjectRepository(Transaction)
-    private transactionRepository: Repository<Transaction>,
     @InjectRepository(ReferralCode)
     private referralCodeRepository: Repository<ReferralCode>,
     private referralService: ReferralService,
@@ -220,63 +231,130 @@ export class RaffleService {
     };
   }
 
-  async setAutoEnroll(autoEnrollDto: AutoEnrollDto) {
-    const { walletAddress, endDate, ticketCount, token } = autoEnrollDto;
-
-    // Get or create user
-    let user = await this.userRepository.findOne({
+  async getUserActivity(walletAddress: string): Promise<UserActivity[]> {
+    // Get user by wallet address
+    const user = await this.userRepository.findOne({
       where: { walletAddress: walletAddress.toLowerCase() },
     });
+
     if (!user) {
-      user = this.userRepository.create({
-        walletAddress: walletAddress.toLowerCase(),
-      });
-      await this.userRepository.save(user);
+      return [];
     }
 
-    // Create auto-enroll transaction
-    const transaction = this.transactionRepository.create({
-      type: TransactionType.AUTO_ENROLL,
-      amount: ticketCount * 1, // $1 per ticket
-      fromAddress: user.walletAddress.toLowerCase(),
-      transactionHash: '', // Will be updated after blockchain transaction
-      metadata: {
-        endDate,
-        ticketCount,
-        token,
-      },
-    });
-
-    await this.transactionRepository.save(transaction);
-
-    return {
-      success: true,
-      transaction: {
-        id: transaction.id,
-        amount: transaction.amount,
-      },
-    };
-  }
-
-  async getUserActivity(walletAddress: string) {
-    const transactions = await this.transactionRepository.find({
-      where: [
-        { fromAddress: walletAddress.toLowerCase() },
-        { toAddress: walletAddress.toLowerCase() },
-      ],
-      relations: ['raffle', 'ticket'],
+    // Get all tickets for the user
+    const userTickets = await this.ticketRepository.find({
+      where: { owner: { id: user.id } },
+      relations: ['raffle', 'referralCode'],
       order: { createdAt: 'DESC' },
     });
 
-    return transactions.map((transaction) => ({
-      id: transaction.id,
-      type: transaction.type,
-      amount: transaction.amount,
-      timestamp: transaction.createdAt,
-      raffleId: transaction.raffle?.id,
-      ticketId: transaction.ticket?.id,
-      status: transaction.status,
-    }));
+    const activities: UserActivity[] = [];
+
+    // Group tickets by raffle
+    const ticketsByRaffle = userTickets.reduce(
+      (acc, ticket) => {
+        if (!acc[ticket.raffle.id]) {
+          acc[ticket.raffle.id] = [];
+        }
+        acc[ticket.raffle.id].push(ticket);
+        return acc;
+      },
+      {} as Record<number, any[]>,
+    );
+
+    // Create purchase activities for each raffle
+    for (const [raffleId, tickets] of Object.entries(ticketsByRaffle)) {
+      const ticketIds = tickets.map((t) => t.ticketNumber);
+      const winningTicket = tickets.find((t) => t.isDistributed);
+
+      activities.push({
+        id: `purchase-${raffleId}-${user.id}`,
+        type: 'purchase',
+        raffleId: raffleId,
+        timestamp: tickets[0].createdAt.toISOString(),
+        ticketCount: tickets.length,
+        totalSpent: tickets.length * 1, // $1 per ticket
+        token: 'USDC',
+        ticketIds: ticketIds,
+        referralCode: tickets[0].referralCode?.code,
+        status: 'COMPLETED',
+      });
+
+      // If there's a winning ticket, create a win activity
+      if (winningTicket) {
+        activities.push({
+          id: `win-${raffleId}-${user.id}`,
+          type: 'win',
+          raffleId: raffleId,
+          timestamp: winningTicket.updatedAt.toISOString(),
+          prize: parseFloat(winningTicket.prizeAmount.toString()),
+          winningTicket: winningTicket.ticketNumber,
+          ticketIds: [winningTicket.ticketNumber],
+          status: 'COMPLETED',
+        });
+      }
+    }
+
+    // Sort by timestamp descending (most recent first)
+    return activities.sort(
+      (a, b) =>
+        new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
+    );
+  }
+
+  async getUserActivityStats(walletAddress: string) {
+    const activities = await this.getUserActivity(walletAddress);
+
+    // Calculate statistics
+    const totalTickets = activities
+      .filter((activity) => activity.type === 'purchase')
+      .reduce((sum, activity) => sum + (activity.ticketCount || 0), 0);
+
+    const totalSpent = activities
+      .filter((activity) => activity.type === 'purchase')
+      .reduce((sum, activity) => sum + (activity.totalSpent || 0), 0);
+
+    const totalWins = activities.filter(
+      (activity) => activity.type === 'win',
+    ).length;
+
+    const totalWon = activities
+      .filter((activity) => activity.type === 'win')
+      .reduce((sum, activity) => sum + (activity.prize || 0), 0);
+
+    // Calculate win rate
+    const totalPurchases = activities.filter(
+      (activity) => activity.type === 'purchase',
+    ).length;
+    const winRate = totalPurchases > 0 ? (totalWins / totalPurchases) * 100 : 0;
+
+    // Find most active day
+    const activitiesByDay = activities.reduce(
+      (acc, activity) => {
+        const date = new Date(activity.timestamp).toDateString();
+        if (!acc[date]) {
+          acc[date] = 0;
+        }
+        if (activity.type === 'purchase') {
+          acc[date] += activity.ticketCount || 0;
+        }
+        return acc;
+      },
+      {} as Record<string, number>,
+    );
+
+    const mostTicketsDay =
+      Object.entries(activitiesByDay).sort(([, a], [, b]) => b - a)[0]?.[0] ||
+      'N/A';
+
+    return {
+      totalTickets,
+      totalSpent,
+      totalWins,
+      totalWon,
+      winRate,
+      mostTicketsDay,
+    };
   }
 
   async getRaffleTickets(id: string, page: number = 1, limit: number = 10) {
@@ -323,63 +401,6 @@ export class RaffleService {
       winnerAddress: winningTicket.owner.walletAddress,
       prizeAmount: winningTicket.prizeAmount,
     };
-  }
-
-  async handleTicketPurchase(
-    lotteryId: number,
-    buyerAddress: string,
-    ticketId: number,
-    count: number,
-    transactionHash: string,
-  ) {
-    try {
-      // Get or create user
-      let user = await this.userRepository.findOne({
-        where: { walletAddress: buyerAddress.toLowerCase() },
-      });
-      if (!user) {
-        user = this.userRepository.create({
-          walletAddress: buyerAddress.toLowerCase(),
-        });
-        await this.userRepository.save(user);
-      }
-
-      // Get the raffle
-      const raffle = await this.raffleRepository.findOne({
-        where: { id: lotteryId },
-      });
-
-      if (!raffle) {
-        throw new Error(`Raffle ${lotteryId} not found`);
-      }
-
-      // Create transaction record
-      const transaction = this.transactionRepository.create({
-        type: TransactionType.TICKET_PURCHASE,
-        amount: count * raffle.ticketPrice,
-        fromAddress: buyerAddress.toLowerCase(),
-        transactionHash,
-        raffle,
-        status: TransactionStatus.COMPLETED,
-      });
-
-      await this.transactionRepository.save(transaction);
-
-      // Update user's total tickets purchased
-      await this.userRepository.update(user.id, {
-        totalTicketsPurchased: () => `totalTicketsPurchased + ${count}`,
-      });
-
-      this.logger.log(
-        `Successfully processed ticket purchase for raffle ${lotteryId}`,
-      );
-    } catch (error) {
-      this.logger.error(
-        `Error handling ticket purchase for raffle ${lotteryId}:`,
-        error,
-      );
-      throw error;
-    }
   }
 
   async updateRaffle(id: number, updateData: Partial<Raffle>) {
