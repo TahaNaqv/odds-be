@@ -22,6 +22,15 @@ export class RaffleController {
     return this.raffleService.getCurrentRaffle();
   }
 
+  @Get('active')
+  async getActiveRaffles() {
+    const raffles = await this.raffleService.getActiveRaffles();
+    return {
+      count: raffles.length,
+      raffles,
+    };
+  }
+
   @Get('past')
   async getPastRaffles(
     @Query('page') page: number = 1,

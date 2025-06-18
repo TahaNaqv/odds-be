@@ -416,6 +416,13 @@ export class RaffleService {
     return this.ticketRepository.update(id, updateData);
   }
 
+  async getActiveRaffles() {
+    return this.raffleRepository.find({
+      where: { status: RaffleStatus.ACTIVE },
+      order: { id: 'ASC' },
+    });
+  }
+
   private formatRaffleResponse(raffle: Raffle) {
     if (!raffle) {
       return null;
