@@ -124,6 +124,11 @@ export class RaffleService {
       throw new BadRequestException('Invalid referral code');
     }
 
+    // Check if user is trying to use their own referral code
+    if (referralCodeEntity.owner.id === userId) {
+      throw new BadRequestException('You cannot use your own referral code');
+    }
+
     // Get current and future raffles for auto-entry
     const currentRaffle = await this.raffleRepository.findOne({
       where: { id: raffleId },
