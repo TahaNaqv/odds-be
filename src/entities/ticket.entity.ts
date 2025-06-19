@@ -46,7 +46,9 @@ export class Ticket {
   @ManyToOne(() => Raffle, (raffle) => raffle.tickets)
   raffle: Raffle;
 
-  @ManyToOne(() => ReferralCode, { nullable: true })
+  @ManyToOne(() => ReferralCode, (referralCode) => referralCode.tickets, {
+    nullable: true,
+  })
   referralCode: ReferralCode;
 
   @CreateDateColumn()

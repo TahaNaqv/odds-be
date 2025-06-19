@@ -6,7 +6,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, MoreThan } from 'typeorm';
 import { Raffle, RaffleStatus } from '../entities/raffle.entity';
-import { Ticket } from '../entities/ticket.entity';
+import { Ticket, TicketGroup } from '../entities/ticket.entity';
 import { User } from '../entities/user.entity';
 import { PurchaseTicketDto } from './dto/purchase-ticket.dto';
 import { AutoEnrollDto } from './dto/auto-enroll.dto';
@@ -28,7 +28,7 @@ interface UserActivity {
   token?: 'USDC' | 'USDT' | 'mUSDC';
   prize?: number;
   winningTicket?: number;
-  ticketIds?: number[];
+  tickets: Ticket[];
   referralCode?: string;
   isAutoEnrolled?: boolean;
   autoEnrollId?: string;
@@ -77,7 +77,7 @@ export class RaffleService {
     });
 
     return {
-      raffles: raffles.map(this.formatRaffleResponse),
+      raffles,
       total,
       page,
       limit,
@@ -94,7 +94,7 @@ export class RaffleService {
       throw new NotFoundException(`Raffle with ID ${id} not found`);
     }
 
-    return this.formatRaffleResponse(raffle);
+    return raffle;
   }
 
   async purchaseTicket(
@@ -247,54 +247,62 @@ export class RaffleService {
     }
 
     // Get all tickets for the user
-    const userTickets = await this.ticketRepository.find({
-      where: { owner: { id: user.id } },
-      relations: ['raffle', 'referralCode'],
+    const raffles = await this.raffleRepository.find({
+      where: { tickets: { owner: { id: user.id } } },
+      relations: ['tickets', 'tickets.owner', 'tickets.referralCode'],
       order: { createdAt: 'DESC' },
     });
 
     const activities: UserActivity[] = [];
 
-    // Group tickets by raffle
-    const ticketsByRaffle = userTickets.reduce(
-      (acc, ticket) => {
-        if (!acc[ticket.raffle.id]) {
-          acc[ticket.raffle.id] = [];
+    // Group tickets by raffle and by day (YYYY-MM-DD)
+    const ticketGroups: Record<string, Ticket[]> = {};
+    for (const raffle of raffles) {
+      for (const ticket of raffle.tickets) {
+        if (ticket.owner && ticket.owner.id === user.id) {
+          const day = ticket.createdAt.toISOString().slice(0, 10); // YYYY-MM-DD
+          const key = `${raffle.id}-${day}`;
+          if (!ticketGroups[key]) {
+            ticketGroups[key] = [];
+          }
+          ticketGroups[key].push(ticket);
         }
-        acc[ticket.raffle.id].push(ticket);
-        return acc;
-      },
-      {} as Record<number, any[]>,
-    );
+      }
+    }
 
-    // Create purchase activities for each raffle
-    for (const [raffleId, tickets] of Object.entries(ticketsByRaffle)) {
-      const ticketIds = tickets.map((t) => t.ticketNumber);
-      const winningTicket = tickets.find((t) => t.isDistributed);
-
+    // Prepare UserActivity response
+    for (const [key, tickets] of Object.entries(ticketGroups)) {
+      if (!tickets.length || !tickets[0]) continue; // Guard clause
+      const firstDash = key.indexOf('-');
+      const raffleId = key.substring(0, firstDash);
+      const day = key.substring(firstDash + 1);
+      const timestamp = new Date(day).toISOString(); // Start of the day in ISO
       activities.push({
-        id: `purchase-${raffleId}-${user.id}`,
+        id: `purchase-${raffleId}-${timestamp}`,
         type: 'purchase',
-        raffleId: raffleId,
-        timestamp: tickets[0].createdAt.toISOString(),
+        raffleId: String(raffleId),
+        timestamp,
         ticketCount: tickets.length,
         totalSpent: tickets.length * 1, // $1 per ticket
         token: 'USDC',
-        ticketIds: ticketIds,
+        tickets: tickets,
         referralCode: tickets[0].referralCode?.code,
         status: 'COMPLETED',
       });
 
-      // If there's a winning ticket, create a win activity
+      // Win activity if any ticket in this group is a winner
+      const winningTicket = tickets.find(
+        (t) => t.groupNumber == TicketGroup.GROUP_1,
+      );
       if (winningTicket) {
         activities.push({
-          id: `win-${raffleId}-${user.id}`,
+          id: `win-${raffleId}-${winningTicket.id}`,
           type: 'win',
-          raffleId: raffleId,
+          raffleId: String(raffleId),
           timestamp: winningTicket.updatedAt.toISOString(),
           prize: parseFloat(winningTicket.prizeAmount.toString()),
           winningTicket: winningTicket.ticketNumber,
-          ticketIds: [winningTicket.ticketNumber],
+          tickets: [winningTicket],
           status: 'COMPLETED',
         });
       }
@@ -313,7 +321,7 @@ export class RaffleService {
     // Calculate statistics
     const totalTickets = activities
       .filter((activity) => activity.type === 'purchase')
-      .reduce((sum, activity) => sum + (activity.ticketCount || 0), 0);
+      .reduce((sum, activity) => sum + (activity.tickets?.length || 0), 0);
 
     const totalSpent = activities
       .filter((activity) => activity.type === 'purchase')
@@ -421,22 +429,5 @@ export class RaffleService {
       where: { status: RaffleStatus.ACTIVE },
       order: { id: 'ASC' },
     });
-  }
-
-  private formatRaffleResponse(raffle: Raffle) {
-    if (!raffle) {
-      return null;
-    }
-
-    return {
-      id: raffle.id,
-      ticketsSold: raffle.totalTickets,
-      maxTickets: raffle.maxTickets,
-      targetAmount: raffle.totalPrizeAmount,
-      prizePool: raffle.distributedAmount,
-      progress: (raffle.totalTickets / raffle.maxTickets) * 100,
-      ticketPrice: raffle.ticketPrice,
-      status: raffle.status,
-    };
   }
 }
