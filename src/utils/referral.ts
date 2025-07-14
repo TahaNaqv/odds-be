@@ -1,4 +1,4 @@
-import { customAlphabet } from 'nanoid';
+const { customAlphabet } = require('nanoid');
 
 // Generate a unique 8-character referral code using alphanumeric characters
 const generateCode = customAlphabet('abcdefghijklmnopqrstuvwxyz0123456789', 8);
