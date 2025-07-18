@@ -124,8 +124,8 @@ export class RaffleService {
       throw new BadRequestException('Invalid referral code');
     }
 
-    // Check if user is trying to use their own referral code
-    if (referralCodeEntity.owner.id === userId) {
+    // Check if user is trying to use their own referral code (only if owner exists)
+    if (referralCodeEntity.owner && referralCodeEntity.owner.id === userId) {
       throw new BadRequestException('You cannot use your own referral code');
     }
 
