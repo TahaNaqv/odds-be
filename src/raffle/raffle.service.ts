@@ -237,78 +237,169 @@ export class RaffleService {
   }
 
   async getUserActivity(walletAddress: string): Promise<UserActivity[]> {
+    this.logger.log(
+      `[DIAGNOSTIC] Starting getUserActivity for ${walletAddress}`,
+    );
+
     // Get user by wallet address
     const user = await this.userRepository.findOne({
       where: { walletAddress: walletAddress.toLowerCase() },
     });
 
     if (!user) {
+      this.logger.warn(
+        `[DIAGNOSTIC] User not found for wallet: ${walletAddress}`,
+      );
       return [];
     }
+    this.logger.log(`[DIAGNOSTIC] Found user ID: ${user.id}`);
 
-    // Get all tickets for the user
-    const raffles = await this.raffleRepository.find({
-      where: { tickets: { owner: { id: user.id } } },
-      relations: ['tickets', 'tickets.owner', 'tickets.referralCode'],
-      order: { createdAt: 'DESC' },
-    });
+    // Use QueryBuilder to fetch only the necessary raw data for the specific user
+    const rawTickets = await this.ticketRepository
+      .createQueryBuilder('ticket')
+      .leftJoin('ticket.raffle', 'raffle')
+      .leftJoin('ticket.referralCode', 'referralCode')
+      .select([
+        'ticket.id as id',
+        'ticket.ownerId as ownerid', // Explicitly select ownerId for validation
+        'ticket.ticketNumber as ticketnumber',
+        'ticket.groupNumber as groupnumber',
+        'ticket.prizeAmount as prizeamount',
+        'ticket.isDistributed as isdistributed',
+        'ticket.transactionHash as transactionhash',
+        'ticket.createdAt as createdat',
+        'ticket.updatedAt as updatedat',
+        'raffle.id as raffleid',
+        'referralCode.code as referralcode',
+      ])
+      .where('ticket.ownerId = :userId', { userId: user.id })
+      .orderBy('ticket.createdAt', 'DESC')
+      .getRawMany();
+
+    this.logger.log(
+      `[DIAGNOSTIC] Query returned ${rawTickets.length} tickets.`,
+    );
+
+    // ================== [DIAGNOSTIC CHECK] ==================
+    let MismatchFound = false;
+    for (const ticket of rawTickets) {
+      if (ticket.ownerid !== user.id) {
+        this.logger.error(
+          `[CRITICAL ERROR] Mismatch found! Query for user ${user.id} returned a ticket for user ${ticket.ownerid}. Ticket ID: ${ticket.id}`,
+        );
+        MismatchFound = true;
+      }
+    }
+    if (!MismatchFound) {
+      this.logger.log(
+        `[DIAGNOSTIC] SUCCESS: All ${rawTickets.length} tickets belong to user ${user.id}.`,
+      );
+    }
+    // =========================================================
 
     const activities: UserActivity[] = [];
 
     // Group tickets by raffle and by day (YYYY-MM-DD)
-    const ticketGroups: Record<string, Ticket[]> = {};
-    for (const raffle of raffles) {
-      for (const ticket of raffle.tickets) {
-        if (ticket.owner && ticket.owner.id === user.id) {
-          const day = ticket.createdAt.toISOString().slice(0, 10); // YYYY-MM-DD
-          const key = `${raffle.id}-${day}`;
-          if (!ticketGroups[key]) {
-            ticketGroups[key] = [];
-          }
-          ticketGroups[key].push(ticket);
-        }
+    const ticketGroups: Record<string, any[]> = {};
+    for (const ticket of rawTickets) {
+      if (!ticket.createdat || isNaN(new Date(ticket.createdat).getTime())) {
+        this.logger.warn(
+          `Ticket ${ticket.id} has an invalid createdAt value, skipping.`,
+        );
+        continue;
       }
+      const raffleId = ticket.raffleid;
+      const day = new Date(ticket.createdat).toISOString().slice(0, 10);
+      const key = `${raffleId}-${day}`;
+      if (!ticketGroups[key]) {
+        ticketGroups[key] = [];
+      }
+      ticketGroups[key].push(ticket);
     }
 
     // Prepare UserActivity response
-    for (const [key, tickets] of Object.entries(ticketGroups)) {
-      if (!tickets.length || !tickets[0]) continue; // Guard clause
+    for (const [key, groupTickets] of Object.entries(ticketGroups)) {
+      if (!groupTickets.length || !groupTickets[0]) continue;
       const firstDash = key.indexOf('-');
       const raffleId = key.substring(0, firstDash);
       const day = key.substring(firstDash + 1);
-      const timestamp = new Date(day).toISOString(); // Start of the day in ISO
+      const timestamp = new Date(day).toISOString();
+
+      const userTickets = groupTickets.map((ticket) => ({
+        id: ticket.id,
+        ticketNumber: ticket.ticketnumber,
+        groupNumber: ticket.groupnumber,
+        prizeAmount: ticket.prizeamount,
+        isDistributed: ticket.isdistributed,
+        transactionHash: ticket.transactionhash,
+        createdAt: ticket.createdat,
+        updatedAt: ticket.updatedat,
+        raffle: { id: ticket.raffleid },
+        referralCode: ticket.referralcode
+          ? { code: ticket.referralcode }
+          : undefined,
+      }));
+
       activities.push({
         id: `purchase-${raffleId}-${timestamp}`,
         type: 'purchase',
         raffleId: String(raffleId),
         timestamp,
-        ticketCount: tickets.length,
-        totalSpent: tickets.length * 1, // $1 per ticket
+        ticketCount: userTickets.length,
+        totalSpent: userTickets.length * 1,
         token: 'USDC',
-        tickets: tickets,
-        referralCode: tickets[0].referralCode?.code,
+        tickets: userTickets as any,
+        referralCode: userTickets[0]?.referralCode?.code,
         status: 'COMPLETED',
       });
 
-      // Win activity if any ticket in this group is a winner
-      const winningTicket = tickets.find(
-        (t) => t.groupNumber == TicketGroup.GROUP_1,
+      const winningTicket = groupTickets.find(
+        (t) => t.groupnumber === TicketGroup.GROUP_1,
       );
       if (winningTicket) {
+        if (
+          !winningTicket.updatedat ||
+          isNaN(new Date(winningTicket.updatedat).getTime())
+        ) {
+          this.logger.warn(
+            `Winning ticket ${winningTicket.id} has an invalid updatedAt value, skipping.`,
+          );
+          continue;
+        }
+        const winTicket = {
+          id: winningTicket.id,
+          ticketNumber: winningTicket.ticketnumber,
+          groupNumber: winningTicket.groupnumber,
+          prizeAmount: winningTicket.prizeamount,
+          isDistributed: winningTicket.isdistributed,
+          transactionHash: winningTicket.transactionhash,
+          createdAt: winningTicket.createdat,
+          updatedAt: winningTicket.updatedat,
+          raffle: { id: winningTicket.raffleid },
+          referralCode: winningTicket.referralcode
+            ? { code: winningTicket.referralcode }
+            : undefined,
+        };
         activities.push({
           id: `win-${raffleId}-${winningTicket.id}`,
           type: 'win',
           raffleId: String(raffleId),
-          timestamp: winningTicket.updatedAt.toISOString(),
-          prize: parseFloat(winningTicket.prizeAmount.toString()),
-          winningTicket: winningTicket.ticketNumber,
-          tickets: [winningTicket],
+          timestamp: new Date(winningTicket.updatedat).toISOString(),
+          prize: parseFloat(winningTicket.prizeamount.toString()),
+          winningTicket: winningTicket.ticketnumber,
+          tickets: [winTicket] as any,
           status: 'COMPLETED',
         });
       }
     }
+    this.logger.log(
+      `[DIAGNOSTIC] Returning ${activities.length} activity groups.`,
+    );
+    // Using JSON.stringify to get a clean log of the final data structure
+    this.logger.log(
+      `[DIAGNOSTIC] Final activities object: ${JSON.stringify(activities, null, 2)}`,
+    );
 
-    // Sort by timestamp descending (most recent first)
     return activities.sort(
       (a, b) =>
         new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
