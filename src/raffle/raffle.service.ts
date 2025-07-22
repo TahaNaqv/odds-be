@@ -70,7 +70,7 @@ export class RaffleService {
   async getPastRaffles(page: number = 1, limit: number = 10) {
     const [raffles, total] = await this.raffleRepository.findAndCount({
       where: { status: RaffleStatus.COMPLETED },
-      relations: ['tickets'],
+      relations: ['tickets', 'tickets.owner'],
       order: { id: 'DESC' },
       skip: (page - 1) * limit,
       take: limit,
