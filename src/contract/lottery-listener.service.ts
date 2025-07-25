@@ -108,20 +108,29 @@ export class LotteryListenerService implements OnModuleInit {
 
   private setupWebSocketListeners() {
     try {
-      // Setup WebSocket error handling
-      this.provider.websocket.on('error', (error) => {
+      // Type guard to ensure we have a WebSocket provider
+      if (!(this.provider instanceof ethers.WebSocketProvider)) {
+        this.logger.error('Expected WebSocket provider but got HTTP provider');
+        this.startPollingMode();
+        return;
+      }
+
+      // Setup WebSocket error handling using addEventListener
+      const websocket = this.provider.websocket as any;
+
+      websocket.addEventListener('error', (error: any) => {
         this.logger.error('WebSocket error:', error);
         this.handleConnectionError(error);
       });
 
-      this.provider.websocket.on('close', (code, reason) => {
+      websocket.addEventListener('close', (event: any) => {
         this.logger.warn(
-          `WebSocket connection closed (code: ${code}, reason: ${reason})`,
+          `WebSocket connection closed (code: ${event.code}, reason: ${event.reason})`,
         );
         this.handleConnectionError(new Error('WebSocket closed'));
       });
 
-      this.provider.websocket.on('open', () => {
+      websocket.addEventListener('open', () => {
         this.logger.log('WebSocket connection established');
         this.reconnectAttempts = 0;
       });
@@ -378,7 +387,16 @@ export class LotteryListenerService implements OnModuleInit {
       }
 
       for (const event of events) {
-        const mockEventPayload = { log: event };
+        // Type guard to ensure we have an EventLog with args
+        if (!('args' in event) || !event.args) {
+          this.logger.warn(`Skipping event without args: ${eventName}`);
+          continue;
+        }
+
+        // Create a simplified event payload for polling mode
+        const mockEventPayload = {
+          log: event,
+        } as any;
 
         switch (eventName) {
           case 'LotteryCreated':
@@ -471,7 +489,11 @@ export class LotteryListenerService implements OnModuleInit {
 
     if (this.provider instanceof ethers.WebSocketProvider) {
       try {
-        this.provider.websocket.close();
+        const websocket = this.provider.websocket as any;
+        if (websocket && websocket.readyState === 1) {
+          // 1 = OPEN
+          websocket.close();
+        }
       } catch (error) {
         this.logger.error('Error closing WebSocket:', error);
       }
