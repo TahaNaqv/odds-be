@@ -114,126 +114,149 @@ export class RaffleService {
     raffleIds: number[];
     ticketCount: number;
   }> {
-    // Validate referral code
-    const referralCodeEntity = await this.referralCodeRepository.findOne({
-      where: { code: referralCode.toLowerCase() },
-      relations: ['owner'],
-    });
+    // 📊 Performance monitoring
+    const startTime = Date.now();
+    const totalTicketsToCreate = ticketCount * autoEntry;
+    this.logger.log(
+      `🎫 Starting ticket purchase: ${totalTicketsToCreate} tickets (${ticketCount} × ${autoEntry} raffles) for user ${userId}`,
+    );
+    // 🚀 Use database transaction for atomicity and performance
+    return await this.raffleRepository.manager.transaction(async (manager) => {
+      // 🚀 Parallel queries instead of sequential - MAJOR PERFORMANCE BOOST
+      const [referralCodeEntity, currentRaffle, user] = await Promise.all([
+        manager.findOne(ReferralCode, {
+          where: { code: referralCode.toLowerCase() },
+          relations: ['owner'],
+        }),
+        manager.findOne(Raffle, {
+          where: { id: raffleId },
+        }),
+        manager.findOne(User, {
+          where: { id: userId },
+          relations: ['referralCode'],
+        }),
+      ]);
 
-    if (!referralCodeEntity) {
-      throw new BadRequestException('Invalid referral code');
-    }
+      // Validation
+      if (!referralCodeEntity) {
+        throw new BadRequestException('Invalid referral code');
+      }
+      if (referralCodeEntity.owner && referralCodeEntity.owner.id === userId) {
+        throw new BadRequestException('You cannot use your own referral code');
+      }
+      if (!currentRaffle) {
+        throw new NotFoundException('Raffle not found');
+      }
+      if (currentRaffle.status !== RaffleStatus.ACTIVE) {
+        throw new BadRequestException('Raffle is not active');
+      }
 
-    // Check if user is trying to use their own referral code (only if owner exists)
-    if (referralCodeEntity.owner && referralCodeEntity.owner.id === userId) {
-      throw new BadRequestException('You cannot use your own referral code');
-    }
-
-    // Get current and future raffles for auto-entry
-    const currentRaffle = await this.raffleRepository.findOne({
-      where: { id: raffleId },
-    });
-
-    if (!currentRaffle) {
-      throw new NotFoundException('Raffle not found');
-    }
-
-    if (currentRaffle.status !== RaffleStatus.ACTIVE) {
-      throw new BadRequestException('Raffle is not active');
-    }
-
-    // Get future raffles for auto-entry
-    const futureRaffles = (
-      await this.raffleRepository.find({
+      // 🚀 Get future raffles with take limit - avoid slice after query
+      const futureRaffles = await manager.find(Raffle, {
         where: {
           status: RaffleStatus.ACTIVE,
           id: MoreThan(currentRaffle.id),
         },
         order: { id: 'ASC' },
-      })
-    ).slice(0, Math.max(0, autoEntry - 1)); // Limit the results after fetching
+        take: Math.max(0, autoEntry - 1), // Database-level limit
+      });
 
-    // Combine current and future raffles
-    const allRaffles = [currentRaffle, ...futureRaffles];
+      const allRaffles = [currentRaffle, ...futureRaffles];
 
-    // Validate we have enough raffles for auto-entry
-    if (allRaffles.length < autoEntry) {
-      throw new BadRequestException(
-        `Not enough future raffles available for ${autoEntry} auto-entries`,
-      );
-    }
-
-    // Create tickets for each raffle
-    const createdTickets: Ticket[] = [];
-
-    const raffleIds: number[] = [];
-    for (const raffle of allRaffles) {
-      // Check if enough tickets are available
-      const remainingTickets = raffle.maxTickets - raffle.totalTickets;
-      if (remainingTickets < ticketCount) {
+      if (allRaffles.length < autoEntry) {
         throw new BadRequestException(
-          `Only ${remainingTickets} tickets available for raffle ${raffle.id}`,
+          `Not enough future raffles available for ${autoEntry} auto-entries`,
         );
       }
 
-      // Create tickets for this raffle
-      for (let i = 0; i < ticketCount; i++) {
-        const ticket = this.ticketRepository.create({
-          ticketNumber: raffle.totalTickets + i + 1,
-          owner: { id: userId },
-          raffle: { id: raffle.id },
-          referralCode: referralCodeEntity,
-        });
+      // 🚀 Prepare all tickets for BULK insert instead of individual saves
+      const ticketsToCreate: Partial<Ticket>[] = [];
+      const raffleUpdates: Array<{ id: number; totalTickets: number }> = [];
+      const raffleIds: number[] = [];
+      let totalTicketsCreated = 0;
 
-        const savedTicket = await this.ticketRepository.save(ticket);
-        createdTickets.push(savedTicket);
+      for (const raffle of allRaffles) {
+        const remainingTickets = raffle.maxTickets - raffle.totalTickets;
+        if (remainingTickets < ticketCount) {
+          throw new BadRequestException(
+            `Only ${remainingTickets} tickets available for raffle ${raffle.id}`,
+          );
+        }
+
+        // 🚀 Prepare tickets for bulk insert - NO INDIVIDUAL SAVES
+        for (let i = 0; i < ticketCount; i++) {
+          ticketsToCreate.push({
+            ticketNumber: raffle.totalTickets + i + 1,
+            owner: { id: userId } as User,
+            raffle: { id: raffle.id } as Raffle,
+            referralCode: referralCodeEntity,
+          });
+        }
+
+        raffleIds.push(raffle.id);
+        raffleUpdates.push({
+          id: raffle.id,
+          totalTickets: raffle.totalTickets + ticketCount,
+        });
+        totalTicketsCreated += ticketCount;
       }
 
-      // Update raffle ticket count
-      await this.raffleRepository.update(raffle.id, {
-        totalTickets: raffle.totalTickets + ticketCount,
-      });
+      // 🚀 Execute ALL operations in parallel - MASSIVE PERFORMANCE GAIN
+      const [createdTickets, contractTx] = await Promise.all([
+        // Bulk insert ALL tickets at once
+        manager.save(Ticket, ticketsToCreate),
 
-      raffleIds.push(raffle.id);
+        // Create contract transaction in parallel
+        this.contractService.createUnsignedBuyTicketsTx(
+          walletAddress,
+          raffleIds,
+          ticketCount,
+        ),
 
-      // Update referral code usage
-      await this.referralCodeRepository.update(referralCodeEntity.id, {
-        totalUses: referralCodeEntity.totalUses + ticketCount,
-      });
+        // Batch update all raffles in parallel
+        Promise.all(
+          raffleUpdates.map((update) =>
+            manager.update(Raffle, update.id, {
+              totalTickets: update.totalTickets,
+            }),
+          ),
+        ),
 
-      // Update user's total tickets purchased
-      await this.userRepository.update(userId, {
-        totalTicketsPurchased: () => `totalTicketsPurchased + ${ticketCount}`,
-      });
-    }
+        // Update referral code usage (single update)
+        manager.update(ReferralCode, referralCodeEntity.id, {
+          totalUses: referralCodeEntity.totalUses + totalTicketsCreated,
+        }),
 
-    // Create unsigned transactions for contract
-    const contractTx = await this.contractService.createUnsignedBuyTicketsTx(
-      walletAddress,
-      raffleIds,
-      ticketCount,
-    );
+        // Update user's total tickets purchased (single update)
+        manager.update(User, userId, {
+          totalTicketsPurchased: () =>
+            `totalTicketsPurchased + ${totalTicketsCreated}`,
+        }),
+      ]);
 
-    // Check if this is the user's first purchase and generate referral code if needed
-    const user = await this.userRepository.findOne({
-      where: { id: userId },
-      relations: ['referralCode'],
+      // 🚀 Handle referral code generation if needed
+      let userReferralCode: string | undefined = user?.referralCode?.code;
+      if (user && !user.referralCode) {
+        const newReferralCode =
+          await this.referralService.generateUserReferralCode(user);
+        userReferralCode = newReferralCode.code;
+      }
+
+      // 📊 Performance logging
+      const endTime = Date.now();
+      const duration = endTime - startTime;
+      this.logger.log(
+        `✅ Ticket purchase completed: ${totalTicketsToCreate} tickets created in ${duration}ms (${((totalTicketsToCreate / duration) * 1000).toFixed(0)} tickets/sec)`,
+      );
+
+      return {
+        tickets: createdTickets,
+        userReferralCode,
+        contractTx,
+        raffleIds,
+        ticketCount,
+      };
     });
-
-    let userReferralCode: string | undefined = user?.referralCode?.code;
-    if (user && !user.referralCode) {
-      const newReferralCode =
-        await this.referralService.generateUserReferralCode(user);
-      userReferralCode = newReferralCode.code;
-    }
-
-    return {
-      tickets: createdTickets,
-      userReferralCode,
-      contractTx,
-      raffleIds,
-      ticketCount,
-    };
   }
 
   async getUserActivity(walletAddress: string): Promise<UserActivity[]> {
@@ -513,6 +536,52 @@ export class RaffleService {
 
   async updateTicket(id: number, updateData: Partial<Ticket>) {
     return this.ticketRepository.update(id, updateData);
+  }
+
+  async updateTicketUsingTicketNumber(
+    ticketNumber: number,
+    raffleId: number,
+    updateData: Partial<Ticket>,
+  ): Promise<void> {
+    const result = await this.ticketRepository.update(
+      {
+        ticketNumber,
+        raffle: { id: raffleId }, // Ensure we update the right ticket in the right raffle
+      },
+      updateData,
+    );
+
+    if (result.affected === 0) {
+      throw new NotFoundException(
+        `Ticket ${ticketNumber} not found in raffle ${raffleId}`,
+      );
+    }
+  }
+
+  async updateTicketsBatchUsingTicketNumbers(
+    updates: Array<{
+      ticketNumber: number;
+      raffleId: number;
+      updates: Partial<Ticket>;
+    }>,
+  ): Promise<void> {
+    if (updates.length === 0) return;
+
+    await this.ticketRepository.manager.transaction(async (manager) => {
+      // 🚀 Batch update using Promise.all for parallel execution
+      await Promise.all(
+        updates.map(({ ticketNumber, raffleId, updates: updateData }) =>
+          manager.update(
+            Ticket,
+            {
+              ticketNumber,
+              raffle: { id: raffleId },
+            },
+            updateData,
+          ),
+        ),
+      );
+    });
   }
 
   async getActiveRaffles() {

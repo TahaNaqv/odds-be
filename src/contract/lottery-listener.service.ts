@@ -298,23 +298,39 @@ export class LotteryListenerService implements OnModuleInit {
         transactionHash: event.log.transactionHash,
       });
 
-      // Update winning tickets
-      for (const ticketId of winningTicketIds) {
-        await this.raffleService.updateTicket(Number(ticketId), {
-          groupNumber: TicketGroup.GROUP_1,
-          prizeAmount: Number(ethers.formatUnits(firstPlacePrizePerTicket, 6)),
-          isDistributed: true,
-        });
-      }
+      // In your LotteryListenerService handleLotteryEnded method:
 
-      // Update second place tickets
-      for (const ticketId of secondPlaceTicketIds) {
-        await this.raffleService.updateTicket(Number(ticketId), {
-          groupNumber: TicketGroup.GROUP_2,
-          prizeAmount: Number(ethers.formatUnits(secondPlacePrizePerTicket, 6)),
-          isDistributed: true,
-        });
-      }
+      const ticketUpdates = [
+        // Prepare winning tickets updates
+        ...winningTicketIds.map((ticketId) => ({
+          ticketNumber: Number(ticketId), // This is actually the ticket number from contract
+          raffleId: Number(lotteryId),
+          updates: {
+            groupNumber: TicketGroup.GROUP_1,
+            prizeAmount: Number(
+              ethers.formatUnits(firstPlacePrizePerTicket, 6),
+            ),
+            isDistributed: true,
+          },
+        })),
+        // Prepare second place tickets updates
+        ...secondPlaceTicketIds.map((ticketId) => ({
+          ticketNumber: Number(ticketId),
+          raffleId: Number(lotteryId),
+          updates: {
+            groupNumber: TicketGroup.GROUP_2,
+            prizeAmount: Number(
+              ethers.formatUnits(secondPlacePrizePerTicket, 6),
+            ),
+            isDistributed: true,
+          },
+        })),
+      ];
+
+      // 🚀 Single batch update call
+      await this.raffleService.updateTicketsBatchUsingTicketNumbers(
+        ticketUpdates,
+      );
 
       this.logger.log(
         `✅ Lottery ${lotteryId} ended successfully - Updated ${winningTicketIds.length + secondPlaceTicketIds.length} winning tickets`,
