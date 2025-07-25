@@ -27,18 +27,19 @@ export class ContractService {
     '0x8c2a993e': 'LotteryAlreadyDrawn',
     '0x9c2a993e': 'NoTickets',
     '0x7c2a993e': 'InsufficientContractBalance',
-    '0x6c2a993e': 'LotteryDoesNotExist'
+    '0x6c2a993e': 'LotteryDoesNotExist',
   };
 
   constructor(
     private configService: ConfigService,
     @Inject(forwardRef(() => RaffleService))
     private raffleService: RaffleService,
+    @Inject('HTTP_PROVIDER')
+    provider: ethers.JsonRpcProvider,
   ) {
-    // Initialize provider and wallet
-    this.provider = new ethers.JsonRpcProvider(
-      this.configService.get<string>('BASE_SEPOLIA_RPC_URL'),
-    );
+    // Use the HTTP provider for all contract operations
+    this.provider = provider;
+    this.logger.log('🌐 ContractService initialized with HTTP provider');
 
     const privateKey = this.configService.get<string>('PRIVATE_KEY');
     if (!privateKey) {
